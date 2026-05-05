@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=64.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cv_tools"
+version = "0.1.0"
+description = "Ferramentas compartilhadas de calibração e visão computacional"
+dependencies = [
+    "opencv-python",
+    "numpy",
+    "scipy"
+]
