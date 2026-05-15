@@ -1,3 +1,17 @@
+"""
+Script de calibracao monocular com imagens de tabuleiro de xadrez.
+
+Modo de uso:
+    python3 calibration/calibrar_camera.py DIR_FOTOS [opcoes]
+
+Exemplos:
+    python3 calibration/calibrar_camera.py calibration/frames/esquerda
+    python3 calibration/calibrar_camera.py calibration/frames/esquerda --rows 9 --cols 6 --size 5.0 --out calibration/npz_files/camera_esq.npz
+
+Observacao:
+    rows e cols sao o numero de cantos internos do tabuleiro, nao o numero de quadrados.
+"""
+
 import argparse
 import glob
 import os
@@ -7,9 +21,10 @@ import numpy as np
 
 
 def calibrar_camera(dir_fotos, rows=9, cols=6, square_size_cm=5.0, output_file="calibracao_camera.npz"):
-    """Calibra uma camera unica usando imagens de tabuleiro."""
+    """Calibra uma camera unica usando imagens de tabuleiro e salva matriz/distorsao em .npz."""
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 1e-5)
 
+    # Gera os pontos 3D ideais do padrao no plano Z=0 (referencial do tabuleiro).
     objp = np.zeros((rows * cols, 3), np.float32)
     objp[:, :2] = np.mgrid[0:cols, 0:rows].T.reshape(-1, 2)
     objp = objp * square_size_cm
@@ -43,6 +58,7 @@ def calibrar_camera(dir_fotos, rows=9, cols=6, square_size_cm=5.0, output_file="
         ret, corners = cv2.findChessboardCorners(gray, (cols, rows), None)
 
         if ret:
+            # Refina os cantos para melhorar precisao da calibracao.
             objpoints.append(objp)
             corners2 = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
             imgpoints.append(corners2)
@@ -58,6 +74,7 @@ def calibrar_camera(dir_fotos, rows=9, cols=6, square_size_cm=5.0, output_file="
     print("Calibrando camera... (isso pode demorar)")
     rms, mtx, dist, rvecs, tvecs = cv2.calibrateCamera(objpoints, imgpoints, img_shape, None, None)
 
+    # Calcula erro medio por ponto reprojetando os pontos 3D nas imagens.
     total_error = 0.0
     total_points = 0
     for index in range(len(objpoints)):

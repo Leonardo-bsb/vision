@@ -1,0 +1,11 @@
+python3 sync/audio_sync/sync_sbs_audio.py \
+z-shelf/data/01_raw/left_12-05-26-tabuleiro.MP4 z-shelf/data/01_raw/right_12-05-26-tabuleiro.MP4  \
+--modo frames_sbs --step 300 --out z-shelf/data/02_frames_sbs
+
+python3 sync/audio_sync/sync_sbs_audio.py \
+z-shelf/data/01_raw/left_12-05-26-tabuleiro.MP4 z-shelf/data/01_raw/right_12-05-26-tabuleiro.MP4 \
+--modo frames_calib --step 300 --out z-shelf/data/02_frames_calib
+
+python3 sync/audio_sync/sync_sbs_audio.py \
+z-shelf/data/01_raw/left_12-05-26-tabuleiro.MP4 z-shelf/data/01_raw/right_12-05-26-tabuleiro.MP4 \
+--modo video_sync --out z-shelf/data/05_video_sbs

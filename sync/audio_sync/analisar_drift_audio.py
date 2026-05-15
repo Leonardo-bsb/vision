@@ -109,6 +109,13 @@ def calcular_delay_trecho(wav_esq, wav_dir):
     sig_e = (sig_e - np.mean(sig_e)) / std_e
     sig_d = (sig_d - np.mean(sig_d)) / std_d
 
+    # Realça os transientes (batidas/estalos)
+    sig_e = np.abs(np.diff(sig_e))
+    sig_d = np.abs(np.diff(sig_d))
+    
+    sig_e = (sig_e - np.mean(sig_e)) / (np.std(sig_e) + 1e-10)
+    sig_d = (sig_d - np.mean(sig_d)) / (np.std(sig_d) + 1e-10)
+
     # Correlação Cruzada via FFT
     correlation = correlate(sig_e, sig_d, mode='full', method='fft')
     lags = np.arange(-len(sig_d) + 1, len(sig_e))

@@ -1,56 +1,151 @@
 # =============================================================================
-# SCRIPT DE SINCRONIZAÇÃO POR ÁUDIO E RETIFICAÇÃO ESTÉREO
+# SCRIPT DE SINCRONIZAÇÃO POR ÁUDIO (SEM RETIFICAÇÃO ESTÉREO)
 # =============================================================================
 # Este script sincroniza dois vídeos (Esquerda e Direita) analisando a correlação
 # entre suas faixas de áudio. Ele encontra o atraso temporal e pode gerar
 # tanto um vídeo lado a lado (Side-by-Side) quanto uma sequência de frames
-# sincronizados para conferência visual.
+# sincronizados para conferência visual, além de frames PNG de alta qualidade
+# para calibração de câmeras.
 #
-# Funcionalidades:
-#    - Sincronia Temporal: Alinha o início dos vídeos pelo áudio (palma/claquete).
-#    - Correção de Drift: Compensa diferenças de relógio entre câmeras em vídeos longos.
-#    - Retificação Estéreo (Opcional): Se fornecido um arquivo .npz, corrige a distorção
-#      da lente e alinha as linhas epipolares para visualização 3D perfeita.
-#    - Frames PNG para Calibração: Extrai frames em PNG (lossless) para uso posterior
-#      no script de calibração de câmeras.
+# FUNCIONALIDADES PRINCIPAIS:
+# ===========================
+#    • Sincronia Temporal: Alinha o início dos vídeos pelo áudio (palma/claquete).
+#    • Correção de Drift: Compensa diferenças de relógio entre câmeras em vídeos longos.
+#    • Geração de Vídeo Sincronizado: Cria saída SBS sem retificação de lente.
+#    • Frames PNG para Calibração: Extrai frames em PNG (lossless) para uso posterior
+#      no script de calibração de câmeras. Salva automaticamente em:
+#      
+#      <out>/
+#      ├── esquerda/
+#      │   ├── frame_000000_tXXX.XXs.png
+#      │   └── ...
+#      └── direita/
+#          ├── frame_000000_tXXX.XXs.png
+#          └── ...
 #
-# Uso:
-#    python3 sync/audio_sync/sincronizar_audio.py [video_esq] [video_dir] [opções]
+# MODO DE USO:
+# ============
+#    python3 sync/audio_sync/sync_sbs_audio.py VIDEO_ESQ VIDEO_DIR --modo {frames_calib|frames_sbs|video_sync} --out DIRETORIO [OPCOES]
 #
-# Exemplos:
-#    1. Sincronia Simples (Rápida, sem correção de lente):
-#       python3 sync/audio_sync/sincronizar_audio.py data/input/videos/LEFT.MP4 data/input/videos/RIGHT.MP4
+# ARGUMENTOS POSICIONAIS (OBRIGATÓRIOS):
+# ======================================
+#    VIDEO_ESQ              Caminho do vídeo da câmera Esquerda
+#    VIDEO_DIR              Caminho do vídeo da câmera Direita
 #
-#    2. Sincronia + Retificação (Recomendado para 3D/VR):
-#       python3 sync/audio_sync/sincronizar_audio.py data/input/videos/LEFT.MP4 data/input/videos/RIGHT.MP4 \
-#         --calib data/calibration/nzd_files/dados_calibracao.npz
+# ARGUMENTOS OBRIGATÓRIOS:
+# ========================
+#    --modo {frames_calib|frames_sbs|video_sync}
+#                           Modo exclusivo de saída (apenas um por execução)
+#                           'frames_calib' = salva pares PNG para calibração
+#                           'frames_sbs'   = salva imagens JPG lado a lado
+#                           'video_sync'   = gera vídeo MP4 SBS
+#    --out DIRETORIO        Obrigatório em todos os modos
+#                           video_sync: diretório do MP4 (nome automático: sbs_YYYYMMDD_HHMMSS.mp4)
+#                           frames_*: diretório onde os frames serão salvos
 #
-#    3. Com Drift Automático (Vídeos > 5min):
-#       python3 sync/audio_sync/sincronizar_audio.py ... --auto-drift
+# OPÇÕES DE SINCRONIZAÇÃO:
+# ========================
+#    -t, --duracao FLOAT    Duração máxima da saída em segundos
+#                           Válido apenas com --modo video_sync
+#    --offset-manual FLOAT  Define manualmente o offset (segundos) entre os vídeos
+#                           Pula a análise de áudio se fornecido
+#                           Exemplo: --offset-manual 2.5 (esquerda começa 2.5s depois)
+#    --drift FLOAT          Correção manual de drift em milissegundos (Esq - Dir)
+#                           Use se souber que as câmeras dessincronizam no final
+#                           Exemplo: --drift 100 (direita correu 100ms mais rápido)
+#    --auto-drift           Detecta e compensa drift automaticamente analisando
+#                           amostras de áudio ao longo de todo o vídeo (lento)
 #
-#    4. Com Duração Limitada (ex: 60 segundos para teste):
-#       python3 sync/audio_sync/sincronizar_audio.py ... -t 60
+# OPÇÕES DE FRAMES (--modo frames_sbs e --modo frames_calib):
+# ============================================================
+#    --step INT             Intervalo em frames para salvar imagens
+#                           Padrão em frames_sbs: 2400 (~80s em 30fps)
+#                           Padrão em frames_calib: 300 (~10s em 30fps)
 #
-#    5. Alta Resolução (Intel QuickSync):
-#       Para vídeos 2.7K ou 4K lado a lado (largura > 4096px), use HEVC:
-#       python3 sync/audio_sync/sincronizar_audio.py ... --calib ... --encoder hevc_qsv
+# OPÇÕES DE FRAMES PNG PARA CALIBRAÇÃO (--modo frames_calib):
+# ===========================================================
+#    Os frames PNG são salvos em subpastas esquerda/ e direita/ dentro de --out
+#    Dica: use --step 300-600 para menos imagens e processamento mais rápido
 #
-#    6. Frames Sincronizados:
-#       python3 sync/audio_sync/sincronizar_audio.py ... --modo frames --out-dir frames_sync
+# OPÇÕES DE CODIFICAÇÃO DE VÍDEO:
+# ================================
+#    --encoder CODEC        Especificar codec manualmente (padrão: libx264)
+#                           Exemplos: libx265, h264_qsv (Intel), h264_nvenc (NVIDIA)
+#    --preset SPEED         Velocidade de codificação CPU: ultrafast, superfast,
+#                           fast (padrão), medium. Mais rápido = qualidade menor
+#    --fps-out INT          Reduz taxa de quadros do vídeo final (ex: 30, 60)
+#                           Útil para compatibilidade com Quest/TV
+#    --gpu                  Usa aceleração NVIDIA H.264 (h264_nvenc) se disponível
 #
-#    7. Vídeo SBS + Frames PNG para Calibração:
-#       python3 sync/audio_sync/sincronizar_audio.py LEFT.MP4 RIGHT.MP4 \
-#         --gerar-frames-calib --step-frames-calib 300
-#       (Gera vídeo sincronizado + frames PNG de alta qualidade em subdiretórios esquerda/direita)
+# OBSERVAÇÕES DE PERFORMANCE E QUALIDADE:
+# ========================================
+#    Velocidade (do mais rápido para o mais lento):
+#    1. h264_nvenc (--gpu)     = GPU NVIDIA, muito rápido
+#    2. h264_qsv               = GPU Intel QuickSync, rápido
+#    3. libx264 (padrão)       = CPU, velocidade moderada, ótima compatibilidade
+#    4. libx265                = CPU, mais lento mas melhor compressão
 #
-#    8. Especificar diretório customizado para frames PNG:
-#       python3 sync/audio_sync/sincronizar_audio.py LEFT.MP4 RIGHT.MP4 \
-#         --gerar-frames-calib --step-frames-calib 300 --out-calib /custom/path/calibracao
+#    Qualidade:
+#    • libx265 gera melhor compressão/qualidade por bitrate
+#    • libx264 é ótimo compromisso entre qualidade e velocidade
+#    • GPU encoders são mais rápidos mas ligeiramente menor qualidade perceptual
+#    • PNG frames para calibração: SEMPRE lossless (máxima qualidade)
 #
-#    9. Somente Frames PNG para Calibração (sem vídeo):
-#       python3 sync/audio_sync/sincronizar_audio.py LEFT.MP4 RIGHT.MP4 \
-#         --modo frames --gerar-frames-calib --step-frames-calib 300 --out-calib data/calib_frames
-# =============================================================================
+#    Dicas:
+#    • Para vídeos QHD/4K: use --fps-out 30 e considere libx265 com --preset medium
+#    • Para processamento rápido: use --gpu se tiver GPU NVIDIA
+#    • Para calibração: use --modo frames_calib com --step 300-600
+#    • Em Intel Iris Xe: prefira hevc_qsv se disponível (menor arquivo)
+#
+# ============================================================================
+# EXEMPLOS DE USO
+# ============================================================================
+#
+#    1. EXEMPLO BÁSICO - Sincronizar vídeos (gerar MP4 SBS):
+#       python3 sync/audio_sync/sync_sbs_audio.py LEFT.MP4 RIGHT.MP4 \
+#           --modo video_sync --out data/output/
+#
+#    2. GERAR FRAMES JPG SINCRONIZADOS (para verificação visual):
+#       python3 sync/audio_sync/sync_sbs_audio.py LEFT.MP4 RIGHT.MP4 \
+#           --modo frames_sbs --out data/frames_sync --step 300
+#       → Salva frames lado a lado em JPG a cada 300 frames
+#
+#    3. TESTE RÁPIDO (duração limitada):
+#       python3 sync/audio_sync/sync_sbs_audio.py LEFT.MP4 RIGHT.MP4 \
+#           --modo video_sync --out data/output/ -t 60
+#       → Processa apenas os primeiros 60 segundos
+#
+#    4. CORRIGIR DRIFT AUTOMÁTICO (vídeos longos >5 min):
+#       python3 sync/audio_sync/sync_sbs_audio.py LEFT.MP4 RIGHT.MP4 \
+#           --modo video_sync --out data/output/ --auto-drift
+#       → Analisa o vídeo todo para detectar dessincronização progressiva
+#
+#    5. USAR GPU NVIDIA (muito mais rápido):
+#       python3 sync/audio_sync/sync_sbs_audio.py LEFT.MP4 RIGHT.MP4 \
+#           --modo video_sync --out data/output/ --gpu --preset ultrafast
+#       → Usa aceleração por hardware NVIDIA
+#
+#    6. OFFSET MANUAL (sem análise de áudio):
+#       python3 sync/audio_sync/sync_sbs_audio.py LEFT.MP4 RIGHT.MP4 \
+#           --modo video_sync --out data/output/ --offset-manual 2.5
+#       → Desalinha a esquerda em 2.5 segundos manualmente
+#
+#    7. SOMENTE FRAMES PNG PARA CALIBRAÇÃO:
+#       python3 sync/audio_sync/sync_sbs_audio.py LEFT.MP4 RIGHT.MP4 \
+#           --modo frames_calib --out data/calib_frames --step 300
+#       → Extrai pares PNG sincronizados para calibração
+#       → Estrutura de saída:
+#          data/calib_frames/
+#          ├── esquerda/
+#          └── direita/
+#
+#    8. VÍDEO + QUALIDADE MÁXIMA (libx265):
+#        python3 sync/audio_sync/sync_sbs_audio.py LEFT.MP4 RIGHT.MP4 \
+#            --modo video_sync --out data/output/ \
+#            --encoder libx265 --preset medium
+#        → Vídeo com melhor compressão/qualidade por bitrate
+#
+# ============================================================================
 
 import subprocess
 import numpy as np
@@ -59,6 +154,34 @@ import sys
 import argparse
 import cv2
 from datetime import datetime
+
+def tocar_sinal(erro=False):
+    """Emite sinal sonoro via bell do terminal: 1 bipe = sucesso, 3 bipes = erro."""
+    n = 3 if erro else 1
+    for _ in range(n):
+        print("\a", end="", flush=True)
+
+
+def detectar_intel_iris_xe():
+    """Detecta Intel Iris Xe via lspci, quando disponível."""
+    try:
+        resultado = subprocess.run(["lspci"], capture_output=True, text=True, check=True)
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return False
+
+    saida = (resultado.stdout + resultado.stderr).lower()
+    return "iris xe" in saida or "xe graphics" in saida
+
+
+def ffmpeg_suporta_encoder(nome_encoder):
+    """Verifica se o FFmpeg atual expõe um encoder específico."""
+    try:
+        resultado = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True, check=True)
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return False
+
+    saida = resultado.stdout.lower()
+    return nome_encoder.lower() in saida
 
 # Tenta importar scipy, se não tiver, avisa ou tenta instalar
 try:
@@ -69,26 +192,6 @@ except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "scipy"])
     from scipy.io import wavfile
     from scipy.signal import correlate
-
-def match_color_stats(source, target):
-    """
-    Transfere a média e desvio padrão de cores da imagem 'target' para 'source'.
-    Corrige diferenças de balanço de branco e exposição.
-    """
-    s_mean, s_std = cv2.meanStdDev(source)
-    t_mean, t_std = cv2.meanStdDev(target)
-    
-    s_mean = s_mean.flatten()
-    s_std = s_std.flatten()
-    t_mean = t_mean.flatten()
-    t_std = t_std.flatten()
-    
-    source = source.astype(np.float32)
-    for i in range(3):
-        scale = t_std[i] / (s_std[i] + 1e-6)
-        source[:,:,i] = (source[:,:,i] - s_mean[i]) * scale + t_mean[i]
-    
-    return np.clip(source, 0, 255).astype(np.uint8)
 
 def extrair_audio_temporario(video_path, audio_out, start_time=0, duracao=20):
     """Extrai um trecho de áudio do vídeo para um arquivo WAV leve (mono, 16kHz) para análise."""
@@ -160,18 +263,25 @@ def calcular_drift_automatico(video_esq, video_dir, duracao_total):
     print(f"CALCULANDO DRIFT AUTOMÁTICO (Amostragem)")
     print(f"{'='*60}")
     
-    intervalo = 60.0  # Analisar a cada 60 segundos
-    janela = 10.0     # Analisar trechos de 10 segundos
+    # Em vídeos curtos, amostrar a cada 60s gera poucos pontos e não calcula regressão.
+    # Esta lógica adapta a quantidade de amostras para manter robustez em ~1-3 minutos.
+    janela = 8.0 if duracao_total <= 120 else 10.0
+    max_start = max(0.0, duracao_total - janela)
+    alvo_amostras = 5 if duracao_total <= 180 else 8
+
+    if max_start == 0.0:
+        amostras_inicio = [0.0]
+    else:
+        amostras_inicio = np.linspace(0.0, max_start, num=alvo_amostras).tolist()
     
     times = []
     delays = []
     
-    current_time = 0.0
     temp_esq = "temp_drift_calc_esq.wav"
     temp_dir = "temp_drift_calc_dir.wav"
     
     try:
-        while current_time + janela < duracao_total:
+        for current_time in amostras_inicio:
             try:
                 extrair_audio_temporario(video_esq, temp_esq, start_time=current_time, duracao=janela)
                 extrair_audio_temporario(video_dir, temp_dir, start_time=current_time, duracao=janela)
@@ -183,8 +293,6 @@ def calcular_drift_automatico(video_esq, video_dir, duracao_total):
                 print(f"  T={current_time:6.1f}s | Delay={delay:8.5f}s")
             except Exception as e:
                 print(f"  T={current_time:6.1f}s | Erro na leitura: {e}")
-            
-            current_time += intervalo
             
         if len(times) > 1:
             # Regressão Linear: Delay = slope * tempo + intercept
@@ -218,22 +326,19 @@ def gerar_frames_sincronizados(video_esq, video_dir, offset_segundos, fps, outpu
     trim_esq = 0
     trim_dir = 0
     if offset_segundos > 0:
+        # Offset positivo: O pico da Esquerda está num índice maior.
+        # Cortar o início da esquerda.
         trim_esq = int(round(offset_segundos * fps))
     elif offset_segundos < 0:
-        trim_dir = int(round(abs(offset_segundos) * fps))
+        # Offset negativo: O pico da Direita está num índice maior. Cortar o início da direita.
+        trim_dir = int(round(abs(offset_segundos) * fps_r))
 
     frame_idx_esq = trim_esq
     count = 0
 
     while frame_idx_esq < total_frames_esq:
-        tempo_esq = (frame_idx_esq - trim_esq) / fps
-        tempo_dir = tempo_esq + offset_segundos
-
-        if tempo_dir < 0:
-            frame_idx_esq += step_frames
-            continue
-
-        frame_idx_dir = trim_dir + int(round(tempo_dir * fps_r))
+        tempo_sync = (frame_idx_esq - trim_esq) / fps
+        frame_idx_dir = trim_dir + int(round(tempo_sync * fps_r))
 
         if frame_idx_dir >= total_frames_dir:
             break
@@ -253,7 +358,9 @@ def gerar_frames_sincronizados(video_esq, video_dir, offset_segundos, fps, outpu
             frame_r = cv2.resize(frame_r, (new_w, frame_l.shape[0]))
 
         combined = cv2.hconcat([frame_l, frame_r])
-        info_text = f"E:{tempo_esq:.2f}s | D:{tempo_dir:.2f}s"
+        tempo_esq_src = frame_idx_esq / fps
+        tempo_dir_src = frame_idx_dir / fps_r
+        info_text = f"E:{tempo_esq_src:.2f}s | D:{tempo_dir_src:.2f}s"
         cv2.putText(combined, info_text, (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
 
         fname = f"sync_{count:04d}_E{frame_idx_esq}_D{frame_idx_dir}.jpg"
@@ -299,7 +406,7 @@ def gerar_frames_calibracao_png(video_esq, video_dir, offset_segundos, fps, outp
     if offset_segundos > 0:
         trim_esq = int(round(offset_segundos * fps))
     elif offset_segundos < 0:
-        trim_dir = int(round(abs(offset_segundos) * fps))
+        trim_dir = int(round(abs(offset_segundos) * fps_r))
 
     frame_idx_esq = trim_esq
     count = 0
@@ -307,14 +414,8 @@ def gerar_frames_calibracao_png(video_esq, video_dir, offset_segundos, fps, outp
     print(f"Começando extração de frames...\n")
 
     while frame_idx_esq < total_frames_esq:
-        tempo_esq = (frame_idx_esq - trim_esq) / fps
-        tempo_dir = tempo_esq + offset_segundos
-
-        if tempo_dir < 0:
-            frame_idx_esq += step_frames
-            continue
-
-        frame_idx_dir = trim_dir + int(round(tempo_dir * fps_r))
+        tempo_sync = (frame_idx_esq - trim_esq) / fps
+        frame_idx_dir = trim_dir + int(round(tempo_sync * fps_r))
 
         if frame_idx_dir >= total_frames_dir:
             break
@@ -332,8 +433,10 @@ def gerar_frames_calibracao_png(video_esq, video_dir, offset_segundos, fps, outp
         # PNG_COMPRESSION_LEVEL 0 = sem compressão (mais rápido)
         # PNG_COMPRESSION_LEVEL 9 = máxima compressão
         # Para calibração, usar 0 (sem perda de qualidade)
-        fname_esq = f"frame_{count:06d}_t{tempo_esq:08.2f}s.png"
-        fname_dir = f"frame_{count:06d}_t{tempo_dir:08.2f}s.png"
+        tempo_esq_src = frame_idx_esq / fps
+        tempo_dir_src = frame_idx_dir / fps_r
+        fname_esq = f"frame_{count:06d}_t{tempo_esq_src:08.2f}s.png"
+        fname_dir = f"frame_{count:06d}_t{tempo_dir_src:08.2f}s.png"
         
         path_esq = os.path.join(dir_esq, fname_esq)
         path_dir = os.path.join(dir_dir, fname_dir)
@@ -343,7 +446,7 @@ def gerar_frames_calibracao_png(video_esq, video_dir, offset_segundos, fps, outp
         cv2.imwrite(path_dir, frame_r, [cv2.IMWRITE_PNG_COMPRESSION, 0])
         
         if (count + 1) % 10 == 0:
-            print(f"[{count+1}] Frames salvos | T={tempo_esq:7.2f}s - {tempo_dir:7.2f}s")
+            print(f"[{count+1}] Frames salvos | T={tempo_esq_src:7.2f}s - {tempo_dir_src:7.2f}s")
 
         frame_idx_esq += step_frames
         count += 1
@@ -358,115 +461,12 @@ def gerar_frames_calibracao_png(video_esq, video_dir, offset_segundos, fps, outp
     print(f"  Direita:  {dir_dir}")
     print(f"{'='*60}\n")
 
-def gerar_video_calibrado(video_esq, video_dir, calib_file, offset_segundos, fps, duracao, output_file, encoder, preset, do_color_match=False):
-    """Gera vídeo sincronizado E retificado (calibrado) usando OpenCV + FFmpeg Pipe."""
-    print(f"Carregando calibração: {calib_file}")
-    data = np.load(calib_file)
-    mtx_l, dist_l = data['mtx_l'], data['dist_l']
-    mtx_r, dist_r = data['mtx_r'], data['dist_r']
-    R1, P1 = data['R1'], data['P1']
-    R2, P2 = data['R2'], data['P2']
-
-    cap_l = cv2.VideoCapture(video_esq)
-    cap_r = cv2.VideoCapture(video_dir)
-    w = int(cap_l.get(cv2.CAP_PROP_FRAME_WIDTH))
-    h = int(cap_l.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-    print("Calculando mapas de retificação...")
-    map1_l, map2_l = cv2.initUndistortRectifyMap(mtx_l, dist_l, R1, P1, (w, h), cv2.CV_16SC2)
-    map1_r, map2_r = cv2.initUndistortRectifyMap(mtx_r, dist_r, R2, P2, (w, h), cv2.CV_16SC2)
-
-    # Sincronia (Seek)
-    offset_frames = int(round(abs(offset_segundos) * fps))
-    start_t_esq, start_t_dir = 0.0, 0.0
-    if offset_segundos > 0:
-        cap_l.set(cv2.CAP_PROP_POS_FRAMES, offset_frames)
-        start_t_esq = offset_segundos
-    else:
-        cap_r.set(cv2.CAP_PROP_POS_FRAMES, offset_frames)
-        start_t_dir = abs(offset_segundos)
-
-    cmd = [
-        "ffmpeg", "-y", "-f", "rawvideo", "-vcodec", "rawvideo",
-        "-s", f"{w*2}x{h}", "-pix_fmt", "bgr24", "-r", str(fps),
-        "-i", "-", 
-        "-ss", str(start_t_esq), "-i", video_esq,
-        "-ss", str(start_t_dir), "-i", video_dir,
-        "-filter_complex", "[1:a][2:a]amix=inputs=2[a]",
-        "-map", "0:v", "-map", "[a]",
-        "-c:v", encoder,
-        "-pix_fmt", "yuv420p"
-    ]
-
-    if "qsv" in encoder:
-        # Intel QuickSync
-        cmd.extend(["-global_quality", "23", "-preset", "veryfast"])
-    elif "nvenc" in encoder:
-        cmd.extend(["-preset", "p1", "-rc", "constqp", "-qp", "23"])
-    else:
-        cmd.extend(["-preset", preset])
-
-    cmd.extend(["-c:a", "aac"])
-    if duracao:
-        cmd.extend(["-t", str(duracao)])
-    
-    # Otimização para Streaming/VR: Move os metadados para o início do arquivo
-    cmd.extend(["-movflags", "+faststart"])
-    cmd.append(output_file)
-    
-    print(f"Iniciando processamento calibrado (Pipe FFmpeg)...")
-    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
-    
-    try:
-        frames_to_process = int(duracao * fps) if duracao else int(1e9)
-        count = 0
-        while count < frames_to_process:
-            ret_l, frame_l = cap_l.read()
-            ret_r, frame_r = cap_r.read()
-            if not ret_l or not ret_r: break
-            
-            rect_l = cv2.remap(frame_l, map1_l, map2_l, cv2.INTER_LINEAR)
-            rect_r = cv2.remap(frame_r, map1_r, map2_r, cv2.INTER_LINEAR)
-            
-            if do_color_match:
-                rect_r = match_color_stats(rect_r, rect_l)
-            
-            frame_sbs = np.hstack((rect_l, rect_r))
-            
-            proc.stdin.write(frame_sbs.tobytes())
-            count += 1
-            if count % 60 == 0: print(f"Frames: {count}", end='\r')
-    except BrokenPipeError:
-        print("\n[ERRO] O processo FFmpeg foi encerrado inesperadamente.")
-        print("       Isso geralmente ocorre por parâmetros de encoder inválidos ou resolução não suportada.")
-        if "h264_qsv" in encoder and w*2 > 4096:
-             print("       DICA: Para resoluções > 4K (como 5.4K), tente usar --encoder hevc_qsv")
-        raise RuntimeError("FFmpeg Broken Pipe")
-    finally:
-        try:
-            if proc.stdin: proc.stdin.close()
-        except BrokenPipeError:
-            pass
-        proc.wait()
-        cap_l.release()
-        cap_r.release()
-
-def gerar_video_sincronizado(video_esq, video_dir, offset_segundos, fps, duracao=None, drift_ms=0.0, total_duracao=None, encoder="libx264", preset="fast", fps_out=None, calib_file=None, output_file=None, do_color_match=False):
+def gerar_video_sincronizado(video_esq, video_dir, offset_segundos, fps, duracao=None, drift_ms=0.0, total_duracao=None, encoder="libx264", preset="fast", fps_out=None, output_file=None):
     """Gera o vídeo final lado a lado aplicando o corte necessário."""
-    if output_file is None:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_file = f"data/output/videos_3d/video_3d_sincronizado_SBS_{timestamp}.mp4"
-    
     # Garantir que o diretório de saída existe
-    os.makedirs(os.path.dirname(output_file), exist_ok=True)
-
-    if calib_file:
-        try:
-            return gerar_video_calibrado(video_esq, video_dir, calib_file, offset_segundos, fps, duracao, output_file, encoder, preset, do_color_match)
-        except RuntimeError:
-            print("\n[AUTO-FIX] Falha na codificação acelerada. Tentando fallback para CPU (libx264)...")
-            # Fallback para CPU com preset ultrafast para não demorar uma eternidade
-            return gerar_video_calibrado(video_esq, video_dir, calib_file, offset_segundos, fps, duracao, output_file, "libx264", "ultrafast", do_color_match)
+    output_dir = os.path.dirname(output_file)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
     
     # Converter offset de tempo (segundos) para número exato de frames
     offset_frames = int(round(abs(offset_segundos) * fps))
@@ -582,36 +582,43 @@ def gerar_video_sincronizado(video_esq, video_dir, offset_segundos, fps, duracao
         print("\n[ERRO] Falha na codificação com FFmpeg.")
         if "nvenc" in encoder:
             print("[AUTO-FIX] Falha na GPU NVIDIA detectada. Tentando fallback para CPU (libx264, preset=ultrafast)...")
-            gerar_video_sincronizado(video_esq, video_dir, offset_segundos, fps, duracao, drift_ms, total_duracao, encoder="libx264", preset="ultrafast", fps_out=fps_out, output_file=output_file, do_color_match=do_color_match)
+            gerar_video_sincronizado(video_esq, video_dir, offset_segundos, fps, duracao, drift_ms, total_duracao, encoder="libx264", preset="ultrafast", fps_out=fps_out, output_file=output_file)
         elif "qsv" in encoder:
             print("[AUTO-FIX] Falha no QuickSync (Intel) detectada. Tentando fallback para CPU (libx264, preset=ultrafast)...")
-            gerar_video_sincronizado(video_esq, video_dir, offset_segundos, fps, duracao, drift_ms, total_duracao, encoder="libx264", preset="ultrafast", fps_out=fps_out, output_file=output_file, do_color_match=do_color_match)
+            gerar_video_sincronizado(video_esq, video_dir, offset_segundos, fps, duracao, drift_ms, total_duracao, encoder="libx264", preset="ultrafast", fps_out=fps_out, output_file=output_file)
         else:
+            tocar_sinal(erro=True)
             sys.exit(1)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Sincroniza vídeos pelo áudio.")
-    parser.add_argument("esq", nargs="?", default="videos_gopro/LEFT.MP4", help="Caminho do vídeo da Esquerda")
-    parser.add_argument("dir", nargs="?", default="videos_gopro/RIGHT.MP4", help="Caminho do vídeo da Direita")
-    parser.add_argument("--modo", choices=["video", "frames"], default="video", help="Escolhe se a saída será um vídeo side-by-side ou frames sincronizados.")
-    parser.add_argument("-t", "--duracao", type=float, help="Duração do vídeo de saída em segundos (opcional). Se omitido, gera completo.")
+    parser.add_argument("esq", help="Caminho do vídeo da câmera Esquerda")
+    parser.add_argument("dir", help="Caminho do vídeo da câmera Direita")
+    parser.add_argument(
+        "--modo",
+        choices=["frames_calib", "frames_sbs", "video_sync"],
+        required=True,
+        help="Modo exclusivo de processamento: 'frames_calib', 'frames_sbs' ou 'video_sync'.",
+    )
+    parser.add_argument("-t", "--duracao", type=float, help="Duração da saída em segundos (apenas para --modo video_sync).")
     parser.add_argument("--drift", type=float, default=0.0, help="Correção de drift em ms (Esq - Dir). Use se souber que as câmeras dessincronizam no final.")
     parser.add_argument("--auto-drift", action="store_true", help="Calcula e aplica o drift automaticamente analisando todo o vídeo.")
     parser.add_argument("--gpu", action="store_true", help="Usa aceleração de hardware NVIDIA (h264_nvenc).")
     parser.add_argument("--preset", default="fast", help="Velocidade do encoder CPU (ultrafast, superfast, fast, medium).")
-    parser.add_argument("--encoder", default="libx264", help="Encoder manual (ex: h264_qsv).")
+    parser.add_argument("--encoder", default="libx264", help="Encoder manual (ex: h264_qsv). (melhor qualidade: libx265 com --preset medium)")
     parser.add_argument("--fps-out", type=int, help="Reduz o FPS do vídeo final (ex: 60) para compatibilidade com Quest/TV.")
-    parser.add_argument("--calib", help="Arquivo .npz de calibração para retificar o vídeo.")
-    parser.add_argument("--out", help="Caminho do arquivo de saída (opcional).")
-    parser.add_argument("--out-dir", help="Diretório de saída quando --modo frames é usado.")
-    parser.add_argument("--step-frames", type=int, default=2400, help="Intervalo em frames para salvar imagens quando --modo frames é usado.")
+    parser.add_argument("--out", required=True, help="Diretório de saída (obrigatório em todos os modos).")
+    parser.add_argument("--step", type=int, help="Intervalo em frames (apenas para --modo frames_calib e --modo frames_sbs).")
     parser.add_argument("--offset-manual", type=float, help="Define o offset (segundos) manualmente, pulando a análise de áudio.")
-    parser.add_argument("--match-color", action="store_true", help="Ajusta a cor da câmera direita para igualar a esquerda (corrige WB). Requer --calib.")
-    parser.add_argument("--janela-audio", type=int, default=40, help="Duração (em segundos) do áudio inicial analisado para encontrar o estalo (padrão: 40).")
-    parser.add_argument("--gerar-frames-calib", action="store_true", help="Gera frames PNG de alta qualidade para calibração (em paralelo com vídeo SBS).")
-    parser.add_argument("--step-frames-calib", type=int, default=300, help="Intervalo em frames para extrair imagens PNG de calibração (padrão: 300 = ~10s @ 30fps).")
-    parser.add_argument("--out-calib", help="Diretório de saída para frames PNG de calibração (padrão: frames_calibracao ao lado do vídeo esquerdo).")
     args = parser.parse_args()
+
+    # Regras de modo exclusivo para simplificar processamento e reduzir falhas.
+    if args.modo == "video_sync":
+        if args.step is not None:
+            parser.error("--step só pode ser usado com --modo frames_calib ou --modo frames_sbs.")
+    else:
+        if args.duracao is not None:
+            parser.error("--duracao só pode ser usado com --modo video_sync.")
 
     p_esq = args.esq
     p_dir = args.dir
@@ -631,8 +638,6 @@ if __name__ == "__main__":
         print("Calculando sincronia inicial por áudio...")
         extrair_audio_temporario(p_esq, "temp_esq.wav", start_time=0, duracao=40)
         extrair_audio_temporario(p_dir, "temp_dir.wav", start_time=0, duracao=40)
-        extrair_audio_temporario(p_esq, "temp_esq.wav", start_time=0, duracao=args.janela_audio)
-        extrair_audio_temporario(p_dir, "temp_dir.wav", start_time=0, duracao=args.janela_audio)
         offset = calcular_atraso_audio("temp_esq.wav", "temp_dir.wav")
     
     # 3. Calcular Drift (se solicitado)
@@ -644,20 +649,30 @@ if __name__ == "__main__":
     encoder_usado = args.encoder
     if args.gpu:
         encoder_usado = "h264_nvenc"
+    elif encoder_usado == "libx264" and detectar_intel_iris_xe():
+        if ffmpeg_suporta_encoder("hevc_qsv"):
+            print("Intel Iris Xe detectada. Usando encoder hevc_qsv para menor tamanho.")
+            encoder_usado = "hevc_qsv"
+        elif ffmpeg_suporta_encoder("h264_qsv"):
+            print("Intel Iris Xe detectada. Usando encoder h264_qsv.")
+            encoder_usado = "h264_qsv"
 
-    # 3. Gerar saída: vídeo final ou frames de validação
-    if args.modo == "frames":
-        output_dir = args.out_dir or os.path.join(os.path.dirname(os.path.abspath(p_esq)), "frames_sync")
-        gerar_frames_sincronizados(p_esq, p_dir, offset, fps, output_dir, step_frames=args.step_frames)
-    else:
-        gerar_video_sincronizado(p_esq, p_dir, offset, fps, duracao=args.duracao, drift_ms=drift_ms, total_duracao=total_duracao, encoder=encoder_usado, preset=args.preset, fps_out=args.fps_out, calib_file=args.calib, output_file=args.out, do_color_match=args.match_color)
-    
-    # 4. Gerar frames PNG para calibração (opcional)
-    if args.gerar_frames_calib:
-        output_calib_dir = args.out_calib or os.path.join(os.path.dirname(os.path.abspath(p_esq)), "frames_calibracao")
-        gerar_frames_calibracao_png(p_esq, p_dir, offset, fps, output_calib_dir, step_frames=args.step_frames_calib)
+    # 3. Gerar saída com modo exclusivo
+    if args.modo == "frames_sbs":
+        step_frames = args.step if args.step is not None else 2400
+        output_dir = args.out
+        gerar_frames_sincronizados(p_esq, p_dir, offset, fps, output_dir, step_frames=step_frames)
+    elif args.modo == "frames_calib":
+        step_frames_calib = args.step if args.step is not None else 300
+        output_calib_dir = args.out
+        gerar_frames_calibracao_png(p_esq, p_dir, offset, fps, output_calib_dir, step_frames=step_frames_calib)
+    else:  # video_sync
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_file = os.path.join(args.out, f"sbs_{timestamp}.mp4")
+        gerar_video_sincronizado(p_esq, p_dir, offset, fps, duracao=args.duracao, drift_ms=drift_ms, total_duracao=total_duracao, encoder=encoder_usado, preset=args.preset, fps_out=args.fps_out, output_file=output_file)
     
     # Limpeza
     if os.path.exists("temp_esq.wav"): os.remove("temp_esq.wav")
     if os.path.exists("temp_dir.wav"): os.remove("temp_dir.wav")
+    tocar_sinal()
     print("Concluído!")

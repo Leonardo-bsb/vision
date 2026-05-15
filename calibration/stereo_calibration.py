@@ -1,11 +1,38 @@
+"""
+Calibracao stereo robusta a partir de pares L/R de imagens de tabuleiro.
+
+Modo de uso (programatico):
+    from calibration.stereo_calibration import calibrar_stereo_robusta
+
+    resultado = calibrar_stereo_robusta(
+        dir_fotos="calibration/data/pares",
+        rows=9,
+        cols=6,
+        square_size=5.0,
+        output_file="calibration/npz_files/dados_calibracao.npz",
+    )
+
+Observacoes:
+    - O nome dos arquivos deve permitir inferir pares L/R (ex.: *_L.jpg e *_R.jpg).
+    - rows/cols representam cantos internos do tabuleiro.
+
+Modo de uso (console):
+    python3 calibration/stereo_calibration.py --dir-fotos calibration/data/pares --out calibration/npz_files/dados_calibracao.npz
+"""
+
 import glob
 import os
 import time
+import argparse
 
 import cv2
 import numpy as np
 
-from .chessboard import construir_pontos_objeto, detectar_cantos_estereo
+try:
+    from .chessboard import construir_pontos_objeto, detectar_cantos_estereo
+except ImportError:
+    # Permite execucao direta: python3 calibration/stereo_calibration.py
+    from chessboard import construir_pontos_objeto, detectar_cantos_estereo
 
 
 def inferir_par_direita(img_l_path):
@@ -35,6 +62,7 @@ def calcular_erros_reprojecao(objpoints, imgpoints, rvecs, tvecs, mtx, dist):
 
 
 def _listar_pares_validos(dir_fotos):
+    # Busca imagens com marcador de esquerda no nome para inferir o par direito.
     all_left = sorted(
         glob.glob(os.path.join(dir_fotos, "*L*.png"))
         + glob.glob(os.path.join(dir_fotos, "*L*.jpg"))
@@ -62,7 +90,7 @@ def calibrar_stereo_robusta(
     unidade_baseline="cm",
     rectify_alpha=None,
 ):
-    """Calibracao estereo robusta com validacoes e metricas de qualidade."""
+    """Calibra intrinsecas/extrinsecas stereo e salva matrizes de retificacao em .npz."""
     if not os.path.exists(dir_fotos):
         raise RuntimeError(f"Pasta nao encontrada: '{dir_fotos}'")
 
@@ -83,6 +111,7 @@ def calibrar_stereo_robusta(
     print(f"Encontrados {len(valid_pairs)} pares de imagens validos para calibracao.")
 
     if max_pairs is not None and len(valid_pairs) > max_pairs:
+        # Amostra uniforme para reduzir custo sem concentrar apenas no inicio/fim.
         print(f"AVISO: Muitos pares ({len(valid_pairs)}). Usando amostra de {max_pairs} para acelerar.")
         indices = np.linspace(0, len(valid_pairs) - 1, max_pairs, dtype=int)
         valid_pairs = [valid_pairs[i] for i in indices]
@@ -149,11 +178,14 @@ def calibrar_stereo_robusta(
 
     t0_cal = time.perf_counter()
 
+
+    # Intrinsecas camera esquerda.
     t0 = time.perf_counter()
     rms_l, mtx_l, dist_l, rvecs_l, tvecs_l = cv2.calibrateCamera(objpoints, imgpoints_l, img_shape, None, None)
     t_l = time.perf_counter() - t0
     err_l = calcular_erros_reprojecao(objpoints, imgpoints_l, rvecs_l, tvecs_l, mtx_l, dist_l)
 
+    # Intrinsecas camera direita.
     t0 = time.perf_counter()
     rms_r, mtx_r, dist_r, rvecs_r, tvecs_r = cv2.calibrateCamera(objpoints, imgpoints_r, img_shape, None, None)
     t_r = time.perf_counter() - t0
@@ -181,6 +213,7 @@ def calibrar_stereo_robusta(
         print(f"Lista salva em '{salvar_pares_ruins_path}'.")
 
     flags = cv2.CALIB_FIX_INTRINSIC
+    # Estereo com intrinsecas fixas: estima apenas relacao entre cameras (R/T).
     t0 = time.perf_counter()
     ret_s, _, _, _, _, R, T, E, F = cv2.stereoCalibrate(
         objpoints,
@@ -200,6 +233,7 @@ def calibrar_stereo_robusta(
     print(f"Translacao (baseline estimado): {np.linalg.norm(T):.4f} {unidade_baseline}")
     print(f"Tempo estereo (cv2.stereoCalibrate): {t_s:.2f}s")
 
+    # Gera transformacoes de retificacao para alinhar epipolares horizontalmente.
     t0 = time.perf_counter()
     if rectify_alpha is None:
         R1, R2, P1, P2, Q, roi1, roi2 = cv2.stereoRectify(mtx_l, dist_l, mtx_r, dist_r, img_shape, R, T)
@@ -244,3 +278,41 @@ def calibrar_stereo_robusta(
         "total_pairs": int(len(valid_pairs)),
         "bad_pairs": int(len(bad_pairs)),
     }
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Calibracao stereo robusta com pares L/R de tabuleiro.")
+    parser.add_argument("--dir-fotos", required=True, help="Diretorio com pares L/R")
+    parser.add_argument("--rows", type=int, default=9, help="Numero de cantos internos verticais")
+    parser.add_argument("--cols", type=int, default=6, help="Numero de cantos internos horizontais")
+    parser.add_argument("--square-size", type=float, default=5.0, help="Tamanho do quadrado do tabuleiro")
+    parser.add_argument("--out", required=True, help="Arquivo .npz de saida")
+    parser.add_argument("--max-pairs", type=int, default=100, help="Limite de pares usados na calibracao")
+    parser.add_argument("--salvar-pares-ruins", help="Arquivo texto para salvar piores pares e pares sem deteccao")
+    parser.add_argument("--top-n-piores", type=int, default=5, help="Quantidade de pares com maior erro a registrar")
+    parser.add_argument("--unidade-baseline", default="cm", help="Unidade textual exibida para baseline")
+    parser.add_argument("--rectify-alpha", type=float, help="Alpha da retificacao (0=crop maximo, 1=preserva FOV)")
+    args = parser.parse_args()
+
+    try:
+        resultado = calibrar_stereo_robusta(
+            dir_fotos=args.dir_fotos,
+            rows=args.rows,
+            cols=args.cols,
+            square_size=args.square_size,
+            output_file=args.out,
+            max_pairs=args.max_pairs,
+            salvar_pares_ruins_path=args.salvar_pares_ruins,
+            top_n_piores=args.top_n_piores,
+            unidade_baseline=args.unidade_baseline,
+            rectify_alpha=args.rectify_alpha,
+        )
+    except RuntimeError as exc:
+        raise SystemExit(f"Erro: {exc}")
+
+    print("Resumo:")
+    print(f"  RMS stereo: {resultado['rms_stereo']:.4f}")
+    print(f"  RMS esquerda: {resultado['rms_left']:.4f}")
+    print(f"  RMS direita: {resultado['rms_right']:.4f}")
+    print(f"  Pares usados: {resultado['detected_pairs']}/{resultado['total_pairs']}")
+    print(f"  Pares sem deteccao: {resultado['bad_pairs']}")
