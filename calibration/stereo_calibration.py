@@ -24,6 +24,7 @@ import glob
 import os
 import time
 import argparse
+from datetime import datetime
 
 import cv2
 import numpy as np
@@ -62,6 +63,43 @@ def calcular_erros_reprojecao(objpoints, imgpoints, rvecs, tvecs, mtx, dist):
 
 
 def _listar_pares_validos(dir_fotos):
+    # Formato novo: dir_fotos/esquerda/*.png e dir_fotos/direita/*.png
+    # (gerado por sync/audio_sync/sync_sbs_audio.py no modo frames_calib).
+    dir_esq = os.path.join(dir_fotos, "esquerda")
+    dir_dir = os.path.join(dir_fotos, "direita")
+
+    if os.path.isdir(dir_esq) and os.path.isdir(dir_dir):
+        padroes = ["*.png", "*.PNG", "*.jpg", "*.JPG"]
+        imgs_esq = []
+        imgs_dir = []
+        for padrao in padroes:
+            imgs_esq.extend(glob.glob(os.path.join(dir_esq, padrao)))
+            imgs_dir.extend(glob.glob(os.path.join(dir_dir, padrao)))
+
+        imgs_esq = sorted(imgs_esq)
+        imgs_dir = sorted(imgs_dir)
+
+        if not imgs_esq or not imgs_dir:
+            return []
+
+        # Chave de pareamento: parte antes de "_t" (ex.: frame_000123).
+        mapa_dir = {}
+        for img_r_path in imgs_dir:
+            stem_r = os.path.splitext(os.path.basename(img_r_path))[0]
+            chave_r = stem_r.split("_t", 1)[0]
+            mapa_dir[chave_r] = img_r_path
+
+        valid_pairs = []
+        for img_l_path in imgs_esq:
+            stem_l = os.path.splitext(os.path.basename(img_l_path))[0]
+            chave_l = stem_l.split("_t", 1)[0]
+            img_r_path = mapa_dir.get(chave_l)
+            if img_r_path:
+                valid_pairs.append((img_l_path, img_r_path))
+
+        return valid_pairs
+
+    # Formato legado: pares L/R no mesmo diretorio.
     # Busca imagens com marcador de esquerda no nome para inferir o par direito.
     all_left = sorted(
         glob.glob(os.path.join(dir_fotos, "*L*.png"))
@@ -78,12 +116,19 @@ def _listar_pares_validos(dir_fotos):
     return valid_pairs
 
 
+def _gerar_nome_npz_automatico(prefixo="dados_calibracao"):
+    """Gera nome de arquivo .npz com sufixo de data/hora."""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"{prefixo}_{timestamp}.npz"
+
+
 def calibrar_stereo_robusta(
     dir_fotos,
     rows=9,
     cols=6,
     square_size=5.0,
-    output_file="dados_calibracao.npz",
+    output_file=None,
+    output_dir=None,
     max_pairs=100,
     salvar_pares_ruins_path=None,
     top_n_piores=5,
@@ -91,6 +136,13 @@ def calibrar_stereo_robusta(
     rectify_alpha=None,
 ):
     """Calibra intrinsecas/extrinsecas stereo e salva matrizes de retificacao em .npz."""
+    if output_file and output_dir:
+        raise RuntimeError("Use apenas um entre output_file e output_dir.")
+
+    if not output_file:
+        nome_automatico = _gerar_nome_npz_automatico()
+        output_file = os.path.join(output_dir, nome_automatico) if output_dir else nome_automatico
+
     if not os.path.exists(dir_fotos):
         raise RuntimeError(f"Pasta nao encontrada: '{dir_fotos}'")
 
@@ -104,8 +156,10 @@ def calibrar_stereo_robusta(
     valid_pairs = _listar_pares_validos(dir_fotos)
     if not valid_pairs:
         raise RuntimeError(
-            "Nenhum par L/R encontrado. Padroes esperados: "
-            "*_L.jpg/*_R.jpg, *_L.png/*_R.png, L_*.jpg/R_*.jpg, xxx-L.jpg/xxx-R.jpg"
+            "Nenhum par valido encontrado. Padroes aceitos: "
+            "(1) Subpastas esquerda/ e direita/ com nomes equivalentes (ex.: frame_000001_t*.png), "
+            "ou (2) pares L/R no mesmo diretorio: *_L.jpg/*_R.jpg, *_L.png/*_R.png, "
+            "L_*.jpg/R_*.jpg, xxx-L.jpg/xxx-R.jpg"
         )
 
     print(f"Encontrados {len(valid_pairs)} pares de imagens validos para calibracao.")
@@ -251,6 +305,10 @@ def calibrar_stereo_robusta(
     t_rect = time.perf_counter() - t0
     print(f"Tempo retificacao (cv2.stereoRectify): {t_rect:.3f}s")
 
+    out_dir = os.path.dirname(output_file)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+
     np.savez(
         output_file,
         mtx_l=mtx_l,
@@ -286,7 +344,9 @@ if __name__ == "__main__":
     parser.add_argument("--rows", type=int, default=9, help="Numero de cantos internos verticais")
     parser.add_argument("--cols", type=int, default=6, help="Numero de cantos internos horizontais")
     parser.add_argument("--square-size", type=float, default=5.0, help="Tamanho do quadrado do tabuleiro")
-    parser.add_argument("--out", required=True, help="Arquivo .npz de saida")
+    output_group = parser.add_mutually_exclusive_group()
+    output_group.add_argument("--out", help="Arquivo .npz de saida (nome manual)")
+    output_group.add_argument("--out-dir", help="Pasta de saida; o nome .npz sera gerado automaticamente com data/hora")
     parser.add_argument("--max-pairs", type=int, default=100, help="Limite de pares usados na calibracao")
     parser.add_argument("--salvar-pares-ruins", help="Arquivo texto para salvar piores pares e pares sem deteccao")
     parser.add_argument("--top-n-piores", type=int, default=5, help="Quantidade de pares com maior erro a registrar")
@@ -301,6 +361,7 @@ if __name__ == "__main__":
             cols=args.cols,
             square_size=args.square_size,
             output_file=args.out,
+            output_dir=args.out_dir,
             max_pairs=args.max_pairs,
             salvar_pares_ruins_path=args.salvar_pares_ruins,
             top_n_piores=args.top_n_piores,

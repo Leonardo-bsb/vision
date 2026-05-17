@@ -15,13 +15,23 @@ Observacao:
 import argparse
 import glob
 import os
+from datetime import datetime
 
 import cv2
 import numpy as np
 
 
-def calibrar_camera(dir_fotos, rows=9, cols=6, square_size_cm=5.0, output_file="calibracao_camera.npz"):
+def _gerar_nome_npz_automatico(prefixo="calibracao_camera"):
+    """Gera nome de arquivo .npz com sufixo de data/hora."""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"{prefixo}_{timestamp}.npz"
+
+
+def calibrar_camera(dir_fotos, rows=9, cols=6, square_size_cm=5.0, output_file=None):
     """Calibra uma camera unica usando imagens de tabuleiro e salva matriz/distorsao em .npz."""
+    if not output_file:
+        output_file = _gerar_nome_npz_automatico()
+
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 1e-5)
 
     # Gera os pontos 3D ideais do padrao no plano Z=0 (referencial do tabuleiro).
@@ -116,7 +126,7 @@ if __name__ == "__main__":
     parser.add_argument("--rows", type=int, default=9, help="Numero de cantos internos verticais")
     parser.add_argument("--cols", type=int, default=6, help="Numero de cantos internos horizontais")
     parser.add_argument("--size", type=float, default=5.0, help="Tamanho do quadrado em cm")
-    parser.add_argument("--out", default="calibracao_camera.npz", help="Arquivo de saida .npz")
+    parser.add_argument("--out", help="Arquivo de saida .npz (se omitido, gera nome automatico com data/hora)")
     args = parser.parse_args()
 
     if not os.path.exists(args.dir_fotos):
